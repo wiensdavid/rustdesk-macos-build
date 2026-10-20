@@ -37,6 +37,9 @@ jobs:
             os: macos-15-intel
             triplet: x64-osx
     runs-on: ${{ matrix.os }}
+    env:
+      # Signieren nur, wenn das Zertifikat als Secret hinterlegt ist
+      HAS_CERT: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
 
     steps:
       - name: RustDesk-Quellcode holen
@@ -76,6 +79,11 @@ jobs:
           targets: ${{ matrix.target }}
           components: rustfmt
 
+      - name: rustfmt installieren
+        run: |
+          rustup component add rustfmt --toolchain ${{ env.MAC_RUST_VERSION }}
+          rustfmt --version
+
       - name: Bridge-Generator installieren
         run: |
           cargo install cargo-expand --version 1.0.95 --locked
@@ -103,6 +111,7 @@ jobs:
         run: python3 ./build.py --flutter
 
       - name: Signier-Zertifikat importieren
+        if: env.HAS_CERT == 'true'
         env:
           P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
           P12_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -120,6 +129,7 @@ jobs:
           security find-identity -v -p codesigning "$KEYCHAIN"
 
       - name: App signieren
+        if: env.HAS_CERT == 'true'
         env:
           SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
         run: |
@@ -131,6 +141,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP"
 
       - name: DMG erstellen, signieren und notarisieren
+        if: env.HAS_CERT == 'true'
         env:
           SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -149,6 +160,17 @@ jobs:
           spctl -a -t open --context context:primary-signature -v "$DMG"
           echo "DMG=$DMG" >> "$GITHUB_ENV"
 
+      - name: Unsignierte DMG erstellen (Test)
+        if: env.HAS_CERT != 'true'
+        run: |
+          APP=flutter/build/macos/Build/Products/Release/RustDesk.app
+          codesign --force --deep --sign - "$APP"
+          DMG="rustdesk-${{ inputs.rustdesk_tag }}-${{ matrix.arch }}-dentacom-UNSIGNIERT.dmg"
+          mkdir dmg_stage
+          cp -R "$APP" dmg_stage/
+          create-dmg --volname "RustDesk" --app-drop-link 450 170 --skip-jenkins "$DMG" dmg_stage/
+          echo "DMG=$DMG" >> "$GITHUB_ENV"
+
       - name: DMG bereitstellen
         uses: actions/upload-artifact@v4
         with:
@@ -156,5 +178,5 @@ jobs:
           path: ${{ env.DMG }}
 
       - name: Schlüsselbund aufräumen
-        if: always()
+        if: always() && env.HAS_CERT == 'true'
         run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
