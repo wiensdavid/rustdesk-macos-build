@@ -74,6 +74,7 @@ jobs:
         with:
           toolchain: ${{ env.MAC_RUST_VERSION }}
           targets: ${{ matrix.target }}
+          components: rustfmt
 
       - name: Bridge-Generator installieren
         run: |
